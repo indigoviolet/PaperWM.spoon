@@ -271,8 +271,78 @@ local function windowEventHandler(window, event, self)
     if space then self:tileSpace(space) end
 end
 
+function PaperWM:bindHotkeys(mapping)
+    local partial = hs.fnutils.partial
+    local spec = {
+        stop_events = partial(self.stop, self),
+        focus_left = partial(self.focusWindow, self, Direction.LEFT),
+        focus_right = partial(self.focusWindow, self, Direction.RIGHT),
+        focus_up = partial(self.focusWindow, self, Direction.UP),
+        focus_down = partial(self.focusWindow, self, Direction.DOWN),
+        swap_left = partial(self.swapWindows, self, Direction.LEFT),
+        swap_right = partial(self.swapWindows, self, Direction.RIGHT),
+        swap_up = partial(self.swapWindows, self, Direction.UP),
+        swap_down = partial(self.swapWindows, self, Direction.DOWN),
+        center_window = partial(self.centerWindow, self),
+        full_width = partial(self.setWindowFullWidth, self),
+        cycle_width = partial(self.cycleWindowSize, self, Direction.WIDTH),
+        cycle_height = partial(self.cycleWindowSize, self, Direction.HEIGHT),
+        slurp_in = partial(self.slurpWindow, self),
+        barf_out = partial(self.barfWindow, self),
+        split_screen = partial(self.splitScreen, self),
+        switch_space_1 = partial(self.switchToSpace, self, 1),
+        switch_space_2 = partial(self.switchToSpace, self, 2),
+        switch_space_3 = partial(self.switchToSpace, self, 3),
+        switch_space_4 = partial(self.switchToSpace, self, 4),
+        switch_space_5 = partial(self.switchToSpace, self, 5),
+        switch_space_6 = partial(self.switchToSpace, self, 6),
+        switch_space_7 = partial(self.switchToSpace, self, 7),
+        switch_space_8 = partial(self.switchToSpace, self, 8),
+        switch_space_9 = partial(self.switchToSpace, self, 9),
+        move_window_1 = partial(self.moveWindowToSpace, self, 1),
+        move_window_2 = partial(self.moveWindowToSpace, self, 2),
+        move_window_3 = partial(self.moveWindowToSpace, self, 3),
+        move_window_4 = partial(self.moveWindowToSpace, self, 4),
+        move_window_5 = partial(self.moveWindowToSpace, self, 5),
+        move_window_6 = partial(self.moveWindowToSpace, self, 6),
+        move_window_7 = partial(self.moveWindowToSpace, self, 7),
+        move_window_8 = partial(self.moveWindowToSpace, self, 8),
+        move_window_9 = partial(self.moveWindowToSpace, self, 9)
+    }
+    hs.spoons.bindHotkeysToSpec(spec, mapping)
+end
+
 ---start automatic window tiling
 ---@return PaperWM
+function PaperWM:splitScreen()
+    -- get current focused window
+    local focused = hs.window.focusedWindow()
+    if not focused then return end
+
+    -- get window to right
+    local focusedIndex = index_table[focused:id()]
+    if not focusedIndex then return end
+
+    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
+    if not rightWindow then return end
+
+    -- get screen info
+    local screen = focused:screen()
+    local screenFrame = screen:frame()
+    local focusFrame = focused:frame()
+
+    -- calculate new frames
+    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
+    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
+
+    -- move windows
+    self:moveWindow(focused, focusNewFrame)
+    self:moveWindow(rightWindow, rightNewFrame)
+
+    -- update layout
+    self:tileSpace(focusedIndex.space)
+  end
+
 function PaperWM:start()
     -- check for some settings
     if not Spaces.screensHaveSeparateSpaces() then
