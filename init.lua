@@ -65,6 +65,7 @@ PaperWM.default_hotkeys = {
     cycle_height = {{"ctrl", "alt", "cmd", "shift"}, "r"},
     slurp_in = {{"ctrl", "alt", "cmd"}, "i"},
     barf_out = {{"ctrl", "alt", "cmd"}, "o"},
+    split_screen = {{"ctrl", "alt", "cmd"}, "s"},
     switch_space_1 = {{"ctrl", "alt", "cmd"}, "1"},
     switch_space_2 = {{"ctrl", "alt", "cmd"}, "2"},
     switch_space_3 = {{"ctrl", "alt", "cmd"}, "3"},
@@ -221,6 +222,7 @@ function PaperWM:bindHotkeys(mapping)
         cycle_height = partial(self.cycleWindowSize, self, Direction.HEIGHT),
         slurp_in = partial(self.slurpWindow, self),
         barf_out = partial(self.barfWindow, self),
+        split_screen = partial(self.splitScreen, self),
         switch_space_1 = partial(self.switchToSpace, self, 1),
         switch_space_2 = partial(self.switchToSpace, self, 2),
         switch_space_3 = partial(self.switchToSpace, self, 3),
@@ -242,6 +244,35 @@ function PaperWM:bindHotkeys(mapping)
     }
     hs.spoons.bindHotkeysToSpec(spec, mapping)
 end
+
+function PaperWM:splitScreen()
+    -- get current focused window
+    local focused = hs.window.focusedWindow()
+    if not focused then return end
+
+    -- get window to right
+    local focusedIndex = index_table[focused:id()]
+    if not focusedIndex then return end
+
+    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
+    if not rightWindow then return end
+
+    -- get screen info
+    local screen = focused:screen()
+    local screenFrame = screen:frame()
+    local focusFrame = focused:frame()
+
+    -- calculate new frames
+    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
+    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
+
+    -- move windows
+    self:moveWindow(focused, focusNewFrame)
+    self:moveWindow(rightWindow, rightNewFrame)
+
+    -- update layout
+    self:tileSpace(focusedIndex.space)
+  end
 
 function PaperWM:start()
     -- check for some settings
