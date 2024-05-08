@@ -111,6 +111,14 @@ PaperWM.window_filter = WindowFilter.new():setOverrideFilter({
     hasTitlebar = true,
     allowRoles = "AXStandardWindow"
 })
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Finder", false)
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Preview", false)
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Spotify", false)
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Music", false)
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("System Settings", false)
+-- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Arc", {fullscreen = false})
+
+
 
 -- number of pixels between windows
 PaperWM.window_gap = 8
@@ -289,6 +297,36 @@ local function focusSpace(space, window)
     elseif Spaces.spaceType(space) == "user" then
         leftClick(point) -- if there are no windows and the space is a user space then click
     end
+end
+
+--Split the screen
+function PaperWM:splitScreen()
+    -- get current focused window
+    local focused = hs.window.focusedWindow()
+    if not focused then return end
+
+    -- get window to right
+    local focusedIndex = index_table[focused:id()]
+    if not focusedIndex then return end
+
+    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
+    if not rightWindow then return end
+
+    -- get screen info
+    local screen = focused:screen()
+    local screenFrame = screen:frame()
+    local focusFrame = focused:frame()
+
+    -- calculate new frames
+    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
+    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
+
+    -- move windows
+    self:moveWindow(focused, focusNewFrame)
+    self:moveWindow(rightWindow, rightNewFrame)
+
+    -- update layout
+    self:tileSpace(focusedIndex.space)
 end
 
 ---start automatic window tiling
