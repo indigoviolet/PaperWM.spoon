@@ -660,6 +660,14 @@ function PaperWM:focusWindow(direction, focused_index)
                 focused_index.col + direction, row)
             if new_focused_window then break end
         end
+
+        -- if not found, wrap to the opposite column
+        if not new_focused_window then
+            local columns = window_list[focused_index.space]
+            local col = direction == Direction.LEFT and #columns or 1
+            new_focused_window = getWindow(focused_index.space, col, focused_index.row)
+        end
+
     elseif direction == Direction.UP or direction == Direction.DOWN then
         new_focused_window = getWindow(focused_index.space, focused_index.col,
             focused_index.row + (direction // 2))
