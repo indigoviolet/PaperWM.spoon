@@ -40,6 +40,11 @@ local Watcher <const> = hs.uielement.watcher
 local Window <const> = hs.window
 local WindowFilter <const> = hs.window.filter
 local leftClick <const> = hs.eventtap.leftClick
+local leftMouseDown <const> = hs.eventtap.event.types.leftMouseDown
+local leftMouseDragged <const> = hs.eventtap.event.types.leftMouseDragged
+local leftMouseUp <const> = hs.eventtap.event.types.leftMouseUp
+local newMouseEvent <const> = hs.eventtap.event.newMouseEvent
+local operatingSystemVersion <const> = hs.host.operatingSystemVersion
 local partial <const> = hs.fnutils.partial
 local rectMidPoint <const> = hs.geometry.rectMidPoint
 
@@ -66,6 +71,7 @@ PaperWM.license = "MIT - https://opensource.org/licenses/MIT"
 PaperWM.default_hotkeys = {
     stop_events          = { { "alt", "cmd", "shift" }, "q" },
     refresh_windows      = { { "alt", "cmd", "shift" }, "r" },
+    toggle_floating      = { { "alt", "cmd", "shift" }, "escape" },
     focus_left           = { { "alt", "cmd" }, "left" },
     focus_right          = { { "alt", "cmd" }, "right" },
     focus_up             = { { "alt", "cmd" }, "up" },
@@ -146,10 +152,14 @@ local Direction <const> = {
     DESCENDING = 6
 }
 
+-- hs.settings key for persisting is_floating, stored as an array of window id
+local IsFloatingKey <const> = 'PaperWM_is_floating'
+
 -- array of windows sorted from left to right
 local window_list = {} -- 3D array of tiles in order of [space][x][y]
 local index_table = {} -- dictionary of {space, x, y} with window id for keys
 local ui_watchers = {} -- dictionary of uielement watchers with window id for keys
+local is_floating = {} -- dictionary of boolean with window id for keys
 
 -- refresh window layout on screen change
 local screen_watcher = Screen.watcher.new(function() PaperWM:refreshWindows() end)
@@ -217,6 +227,15 @@ local function updateIndexTable(space, column)
     end
 end
 
+---save the is_floating list to settings
+local function persistFloatingList()
+    local persisted = {}
+    for k, _ in pairs(is_floating) do
+        table.insert(persisted, k)
+    end
+    hs.settings.set(IsFloatingKey, persisted)
+end
+
 local focused_window = nil ---@type Window|nil
 local pending_window = nil ---@type Window|nil
 
@@ -235,6 +254,16 @@ local function windowEventHandler(window, event, self)
     the window again later. Also schedule the windowFocused handler to run later
     after the window was added ]]
     --
+
+    if is_floating[window:id()] then
+        -- this event is only meaningful for floating windows
+        if event == "windowDestroyed" then
+            is_floating[window:id()] = nil
+            persistFloatingList()
+        end
+        -- no other events are meaningful for floating windows
+        return
+    end
 
     if event == "windowFocused" then
         if pending_window and window == pending_window then
@@ -279,25 +308,46 @@ local function focusSpace(space, window)
         return
     end
 
-    -- move cursor to center of screen
-    local point = rectMidPoint(screen:fullFrame())
-    Mouse.absolutePosition(point)
-
     -- focus provided window or first window on new space
     window = window or getFirstVisibleWindow(window_list[space], screen)
-    if window then
-        window:focus()
-        -- MacOS will sometimes switch to another window of the same applications on a different space
-        -- Setup a timer to check that the requested window stays focused
-        local function focusCheck()
-            if window ~= Window.focusedWindow() then
-                window:focus()
+
+    local do_space_focus = coroutine.wrap(function()
+        if window then
+            local function check_focus(win, n)
+                local focused = true
+                for i = 1, n do -- ensure that window focus does not change
+                    focused = focused and (Window.focusedWindow() == win)
+                    if not focused then return false end
+                    coroutine.yield(false) -- not done
+                end
+                return focused
             end
+            repeat
+                window:focus()
+                coroutine.yield(false) -- not done
+            until (Spaces.focusedSpace() == space) and check_focus(window, 3)
+        else
+            local point = screen:frame()
+            point.x = point.x + (point.w // 2)
+            point.y = point.y - 4
+            repeat
+                leftClick(point)       -- click on menubar
+                coroutine.yield(false) -- not done
+            until Spaces.focusedSpace() == space
         end
-        for i = 1, 3 do Timer.doAfter(i * Window.animationDuration, focusCheck) end
-    elseif Spaces.spaceType(space) == "user" then
-        leftClick(point) -- if there are no windows and the space is a user space then click
-    end
+
+        -- move cursor to center of screen
+        Mouse.absolutePosition(rectMidPoint(screen:frame()))
+        return true -- done
+    end)
+
+    local start_time = Timer.secondsSinceEpoch()
+    Timer.doUntil(do_space_focus, function(timer)
+        if Timer.secondsSinceEpoch() - start_time > 4 then
+            PaperWM.logger.ef("focusSpace() timeout! space %d focused space %d", space, Spaces.focusedSpace())
+            timer:stop()
+        end
+    end, Window.animationDuration)
 end
 
 --Split the screen
@@ -343,6 +393,17 @@ function PaperWM:start()
     window_list = {}
     index_table = {}
     ui_watchers = {}
+    is_floating = {}
+
+    -- restore saved is_floating state, filtering for valid windows
+    local persisted = hs.settings.get(IsFloatingKey) or {}
+    for _, id in ipairs(persisted) do
+        local window = Window.get(id)
+        if window and self.window_filter:isWindowAllowed(window) then
+            is_floating[id] = true
+        end
+    end
+    persistFloatingList()
 
     -- populate window list, index table, ui_watchers, and set initial layout
     self:refreshWindows()
@@ -351,7 +412,7 @@ function PaperWM:start()
     self.window_filter:subscribe({
         WindowFilter.windowFocused, WindowFilter.windowVisible,
         WindowFilter.windowNotVisible, WindowFilter.windowFullscreened,
-        WindowFilter.windowUnfullscreened
+        WindowFilter.windowUnfullscreened, WindowFilter.windowDestroyed
     }, function(window, _, event) windowEventHandler(window, event, self) end)
 
     -- watch for external monitor plug / unplug
@@ -367,6 +428,11 @@ function PaperWM:stop()
     self.window_filter:unsubscribeAll()
     for _, watcher in pairs(ui_watchers) do watcher:stop() end
     screen_watcher:stop()
+
+    -- fit all windows within the bounds of the screen
+    for _, window in ipairs(self.window_filter:getWindows()) do
+        window:setFrameInScreenBounds()
+    end
 
     return self
 end
@@ -428,10 +494,12 @@ function PaperWM:tileSpace(space)
 
     -- if focused window is in space, tile from that
     local focused_window = Window.focusedWindow()
-    local anchor_window = (focused_window and
-            (Spaces.windowSpaces(focused_window)[1] == space)) and
-        focused_window or
-        getFirstVisibleWindow(window_list[space], screen)
+    local anchor_window = nil
+    if focused_window and not is_floating[focused_window:id()] and Spaces.windowSpaces(focused_window)[1] == space then
+        anchor_window = focused_window
+    else
+        anchor_window = getFirstVisibleWindow(window_list[space], screen)
+    end
 
     if not anchor_window then
         self.logger.e("no anchor window in space")
@@ -509,7 +577,9 @@ function PaperWM:refreshWindows()
     local retile_spaces = {} -- spaces that need to be retiled
     for _, window in ipairs(all_windows) do
         local index = index_table[window:id()]
-        if not index then
+        if is_floating[window:id()] then
+            -- ignore floating windows
+        elseif not index then
             -- add window
             local space = self:addWindow(window)
             if space then retile_spaces[space] = true end
@@ -616,6 +686,7 @@ function PaperWM:removeWindow(remove_window, skip_new_window_focus)
     end
 
     -- remove watcher
+    ui_watchers[remove_window:id()]:stop()
     ui_watchers[remove_window:id()] = nil
 
     -- update index table
@@ -1076,8 +1147,9 @@ end
 
 ---move focused window to a Mission Control space
 ---@param index number ID for space
-function PaperWM:moveWindowToSpace(index)
-    local focused_window = Window.focusedWindow()
+---@param window Window|nil optional window to move
+function PaperWM:moveWindowToSpace(index, window)
+    local focused_window = window or Window.focusedWindow()
     if not focused_window then
         self.logger.d("focused window not found")
         return
@@ -1105,6 +1177,13 @@ function PaperWM:moveWindowToSpace(index)
         return
     end
 
+
+    local screen = Screen(Spaces.spaceDisplay(new_space))
+    if not screen then
+        self.logger.d("no screen for space")
+        return
+    end
+
     -- cache a copy of focused_window, don't switch focus when removing window
     local old_space = self:removeWindow(focused_window, true)
     if not old_space then
@@ -1112,13 +1191,62 @@ function PaperWM:moveWindowToSpace(index)
         return
     end
 
-    Spaces.moveWindowToSpace(focused_window, new_space)
-    self:addWindow(focused_window)
-    self:tileSpace(old_space)
-    self:tileSpace(new_space)
-    Spaces.gotoSpace(new_space)
+    -- Hopefully this ugly hack isn't around for long
+    -- https://github.com/Hammerspoon/hammerspoon/issues/3636
+    local version = operatingSystemVersion()
+    if version.major * 100 + version.minor >= 1405 then
+        local start_point    = focused_window:frame()
+        start_point.x        = start_point.x + start_point.w // 2
+        start_point.y        = start_point.y + 4
 
-    focusSpace(new_space, focused_window)
+        local end_point      = screen:frame()
+        end_point.x          = end_point.x + end_point.w // 2
+        end_point.y          = end_point.y + self.window_gap + 4
+
+        local do_window_drag = coroutine.wrap(function()
+            -- drag window half way there
+            start_point.x = start_point.x + ((end_point.x - start_point.x) // 2)
+            start_point.y = start_point.y + ((end_point.y - start_point.y) // 2)
+            newMouseEvent(leftMouseDragged, start_point):post()
+            coroutine.yield(false) -- not done
+
+            -- finish drag and release
+            newMouseEvent(leftMouseUp, end_point):post()
+
+            -- wait until window registers as on the new space
+            repeat
+                coroutine.yield(false) -- not done
+            until Spaces.windowSpaces(focused_window)[1] == new_space
+
+            -- add window and tile
+            self:addWindow(focused_window)
+            self:tileSpace(old_space)
+            self:tileSpace(new_space)
+            focusSpace(new_space, focused_window)
+            return true -- done
+        end)
+
+        -- pick up window, switch spaces, wait for space to be ready, drag and drop window, wait for window to be ready
+        newMouseEvent(leftMouseDown, start_point):post()
+        Spaces.gotoSpace(new_space)
+        local start_time = Timer.secondsSinceEpoch()
+        Timer.doUntil(do_window_drag, function(timer)
+                if Timer.secondsSinceEpoch() - start_time > 4 then
+                    self.logger.ef("moveWindowToSpace() timeout! new space %d curr space %d window space %d", new_space,
+                        Spaces.activeSpaceOnScreen(screen:id()), Spaces.windowSpaces(focused_window)[1])
+                    timer:stop()
+                end
+            end,
+            Window.animationDuration)
+    else -- MacOS < 14.5
+        Spaces.moveWindowToSpace(focused_window, new_space)
+        self:addWindow(focused_window)
+        self:tileSpace(old_space)
+        self:tileSpace(new_space)
+        Spaces.gotoSpace(new_space)
+
+        focusSpace(new_space, focused_window)
+    end
 end
 
 ---move and resize a window to the coordinates specified by the frame
@@ -1147,10 +1275,38 @@ function PaperWM:moveWindow(window, frame)
     end)
 end
 
+---add or remove focused window from the floating layer and retile the space
+function PaperWM:toggleFloating()
+    local window = Window.focusedWindow()
+    if not window then
+        self.logger.d("focused window not found")
+        return
+    end
+
+    local id = window:id()
+    if is_floating[id] then
+        is_floating[id] = nil
+    else
+        is_floating[id] = true
+    end
+    persistFloatingList()
+
+    local space = nil
+    if is_floating[id] then
+        space = self:removeWindow(window, true)
+    else
+        space = self:addWindow(window)
+    end
+    if space then
+        self:tileSpace(space)
+    end
+end
+
 ---supported window movement actions
 PaperWM.actions = {
     stop_events = partial(PaperWM.stop, PaperWM),
     refresh_windows = partial(PaperWM.refreshWindows, PaperWM),
+    toggle_floating = partial(PaperWM.toggleFloating, PaperWM),
     focus_left = partial(PaperWM.focusWindow, PaperWM, Direction.LEFT),
     focus_right = partial(PaperWM.focusWindow, PaperWM, Direction.RIGHT),
     focus_up = partial(PaperWM.focusWindow, PaperWM, Direction.UP),
