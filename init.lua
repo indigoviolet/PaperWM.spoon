@@ -31,7 +31,6 @@
 ---
 ---
 --- Download: [https://github.com/mogenson/PaperWM.spoon](https://github.com/mogenson/PaperWM.spoon)
-local Mouse <const> = hs.mouse
 local Rect <const> = hs.geometry.rect
 local Screen <const> = hs.screen
 local Spaces <const> = hs.spaces
@@ -39,14 +38,9 @@ local Timer <const> = hs.timer
 local Watcher <const> = hs.uielement.watcher
 local Window <const> = hs.window
 local WindowFilter <const> = hs.window.filter
-local leftClick <const> = hs.eventtap.leftClick
-local leftMouseDown <const> = hs.eventtap.event.types.leftMouseDown
-local leftMouseDragged <const> = hs.eventtap.event.types.leftMouseDragged
-local leftMouseUp <const> = hs.eventtap.event.types.leftMouseUp
-local newMouseEvent <const> = hs.eventtap.event.newMouseEvent
-local operatingSystemVersion <const> = hs.host.operatingSystemVersion
 local partial <const> = hs.fnutils.partial
-local rectMidPoint <const> = hs.geometry.rectMidPoint
+
+local MissionControl = dofile(hs.spoons.resourcePath("mission_control.lua"))
 
 local PaperWM = {}
 PaperWM.__index = PaperWM
@@ -62,7 +56,7 @@ PaperWM.license = "MIT - https://opensource.org/licenses/MIT"
 
 ---@alias PaperWM table PaperWM module object
 ---@alias Window userdata a ui.window
----@alias Frame table hs.geometry rect
+---@alias Frame table hs.geometry.rect
 ---@alias Index { row: number, col: number, space: number }
 ---@alias Space number a Mission Control space ID
 ---@alias Screen userdata hs.screen
@@ -163,19 +157,6 @@ local is_floating = {} -- dictionary of boolean with window id for keys
 
 -- refresh window layout on screen change
 local screen_watcher = Screen.watcher.new(function() PaperWM:refreshWindows() end)
-
----get the Mission Control space for the provided index
----@param index number index for Mission Control space
----@return Space|nil
-local function getSpace(index)
-    local layout = Spaces.allSpaces()
-    for _, screen in ipairs(Screen.allScreens()) do
-        local screen_uuid = screen:getUUID()
-        local num_spaces = #layout[screen_uuid]
-        if num_spaces >= index then return layout[screen_uuid][index] end
-        index = index - num_spaces
-    end
-end
 
 ---return the leftmost window that's completely on the screen
 ---@param columns Window[] a column of windows
@@ -299,55 +280,75 @@ local function windowEventHandler(window, event, self)
     if space then self:tileSpace(space) end
 end
 
----make the specified space the active space
----@param space Space
----@param window Window|nil a window in the space
-local function focusSpace(space, window)
-    local screen = Screen(Spaces.spaceDisplay(space))
-    if not screen then
-        return
-    end
+function PaperWM:bindHotkeys(mapping)
+    local partial = hs.fnutils.partial
+    local spec = {
+        stop_events = partial(self.stop, self),
+        focus_left = partial(self.focusWindow, self, Direction.LEFT),
+        focus_right = partial(self.focusWindow, self, Direction.RIGHT),
+        focus_up = partial(self.focusWindow, self, Direction.UP),
+        focus_down = partial(self.focusWindow, self, Direction.DOWN),
+        swap_left = partial(self.swapWindows, self, Direction.LEFT),
+        swap_right = partial(self.swapWindows, self, Direction.RIGHT),
+        swap_up = partial(self.swapWindows, self, Direction.UP),
+        swap_down = partial(self.swapWindows, self, Direction.DOWN),
+        center_window = partial(self.centerWindow, self),
+        full_width = partial(self.setWindowFullWidth, self),
+        cycle_width = partial(self.cycleWindowSize, self, Direction.WIDTH),
+        cycle_height = partial(self.cycleWindowSize, self, Direction.HEIGHT),
+        slurp_in = partial(self.slurpWindow, self),
+        barf_out = partial(self.barfWindow, self),
+        split_screen = partial(self.splitScreen, self),
+        switch_space_1 = partial(self.switchToSpace, self, 1),
+        switch_space_2 = partial(self.switchToSpace, self, 2),
+        switch_space_3 = partial(self.switchToSpace, self, 3),
+        switch_space_4 = partial(self.switchToSpace, self, 4),
+        switch_space_5 = partial(self.switchToSpace, self, 5),
+        switch_space_6 = partial(self.switchToSpace, self, 6),
+        switch_space_7 = partial(self.switchToSpace, self, 7),
+        switch_space_8 = partial(self.switchToSpace, self, 8),
+        switch_space_9 = partial(self.switchToSpace, self, 9),
+        move_window_1 = partial(self.moveWindowToSpace, self, 1),
+        move_window_2 = partial(self.moveWindowToSpace, self, 2),
+        move_window_3 = partial(self.moveWindowToSpace, self, 3),
+        move_window_4 = partial(self.moveWindowToSpace, self, 4),
+        move_window_5 = partial(self.moveWindowToSpace, self, 5),
+        move_window_6 = partial(self.moveWindowToSpace, self, 6),
+        move_window_7 = partial(self.moveWindowToSpace, self, 7),
+        move_window_8 = partial(self.moveWindowToSpace, self, 8),
+        move_window_9 = partial(self.moveWindowToSpace, self, 9)
+    }
+    hs.spoons.bindHotkeysToSpec(spec, mapping)
+end
 
-    -- focus provided window or first window on new space
-    window = window or getFirstVisibleWindow(window_list[space], screen)
+--Split the screen
+function PaperWM:splitScreen()
+    -- get current focused window
+    local focused = hs.window.focusedWindow()
+    if not focused then return end
 
-    local do_space_focus = coroutine.wrap(function()
-        if window then
-            local function check_focus(win, n)
-                local focused = true
-                for i = 1, n do -- ensure that window focus does not change
-                    focused = focused and (Window.focusedWindow() == win)
-                    if not focused then return false end
-                    coroutine.yield(false) -- not done
-                end
-                return focused
-            end
-            repeat
-                window:focus()
-                coroutine.yield(false) -- not done
-            until (Spaces.focusedSpace() == space) and check_focus(window, 3)
-        else
-            local point = screen:frame()
-            point.x = point.x + (point.w // 2)
-            point.y = point.y - 4
-            repeat
-                leftClick(point)       -- click on menubar
-                coroutine.yield(false) -- not done
-            until Spaces.focusedSpace() == space
-        end
+    -- get window to right
+    local focusedIndex = index_table[focused:id()]
+    if not focusedIndex then return end
 
-        -- move cursor to center of screen
-        Mouse.absolutePosition(rectMidPoint(screen:frame()))
-        return true -- done
-    end)
+    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
+    if not rightWindow then return end
 
-    local start_time = Timer.secondsSinceEpoch()
-    Timer.doUntil(do_space_focus, function(timer)
-        if Timer.secondsSinceEpoch() - start_time > 4 then
-            PaperWM.logger.ef("focusSpace() timeout! space %d focused space %d", space, Spaces.focusedSpace())
-            timer:stop()
-        end
-    end, Window.animationDuration)
+    -- get screen info
+    local screen = focused:screen()
+    local screenFrame = screen:frame()
+    local focusFrame = focused:frame()
+
+    -- calculate new frames
+    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
+    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
+
+    -- move windows
+    self:moveWindow(focused, focusNewFrame)
+    self:moveWindow(rightWindow, rightNewFrame)
+
+    -- update layout
+    self:tileSpace(focusedIndex.space)
 end
 
 --Split the screen
@@ -382,6 +383,35 @@ end
 
 ---start automatic window tiling
 ---@return PaperWM
+function PaperWM:splitScreen()
+    -- get current focused window
+    local focused = hs.window.focusedWindow()
+    if not focused then return end
+
+    -- get window to right
+    local focusedIndex = index_table[focused:id()]
+    if not focusedIndex then return end
+
+    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
+    if not rightWindow then return end
+
+    -- get screen info
+    local screen = focused:screen()
+    local screenFrame = screen:frame()
+    local focusFrame = focused:frame()
+
+    -- calculate new frames
+    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
+    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
+
+    -- move windows
+    self:moveWindow(focused, focusNewFrame)
+    self:moveWindow(rightWindow, rightNewFrame)
+
+    -- update layout
+    self:tileSpace(focusedIndex.space)
+  end
+
 function PaperWM:start()
     -- check for some settings
     if not Spaces.screensHaveSeparateSpaces() then
@@ -1118,14 +1148,16 @@ end
 ---switch to a Mission Control space
 ---@param index number incremental id for space
 function PaperWM:switchToSpace(index)
-    local space = getSpace(index)
+    local space = MissionControl:getSpaceID(index)
     if not space then
         self.logger.d("space not found")
         return
     end
 
+    local screen = Screen(Spaces.spaceDisplay(space))
+    local window = getFirstVisibleWindow(window_list[space], screen)
     Spaces.gotoSpace(space)
-    focusSpace(space)
+    MissionControl:focusSpace(space, window)
 end
 
 ---switch to a Mission Control space to the left or right of current space
@@ -1159,10 +1191,9 @@ function PaperWM:incrementSpace(direction)
 end
 
 ---move focused window to a Mission Control space
----@param index number ID for space
----@param window Window|nil optional window to move
-function PaperWM:moveWindowToSpace(index, window)
-    local focused_window = window or Window.focusedWindow()
+---@param index number space index
+function PaperWM:moveWindowToSpace(index)
+    local focused_window = Window.focusedWindow()
     if not focused_window then
         self.logger.d("focused window not found")
         return
@@ -1174,7 +1205,7 @@ function PaperWM:moveWindowToSpace(index, window)
         return
     end
 
-    local new_space = getSpace(index)
+    local new_space = MissionControl:getSpaceID(index)
     if not new_space then
         self.logger.d("space not found")
         return
@@ -1204,62 +1235,17 @@ function PaperWM:moveWindowToSpace(index, window)
         return
     end
 
-    -- Hopefully this ugly hack isn't around for long
-    -- https://github.com/Hammerspoon/hammerspoon/issues/3636
-    local version = operatingSystemVersion()
-    if version.major * 100 + version.minor >= 1405 then
-        local start_point    = focused_window:frame()
-        start_point.x        = start_point.x + start_point.w // 2
-        start_point.y        = start_point.y + 4
-
-        local end_point      = screen:frame()
-        end_point.x          = end_point.x + end_point.w // 2
-        end_point.y          = end_point.y + self.window_gap + 4
-
-        local do_window_drag = coroutine.wrap(function()
-            -- drag window half way there
-            start_point.x = start_point.x + ((end_point.x - start_point.x) // 2)
-            start_point.y = start_point.y + ((end_point.y - start_point.y) // 2)
-            newMouseEvent(leftMouseDragged, start_point):post()
-            coroutine.yield(false) -- not done
-
-            -- finish drag and release
-            newMouseEvent(leftMouseUp, end_point):post()
-
-            -- wait until window registers as on the new space
-            repeat
-                coroutine.yield(false) -- not done
-            until Spaces.windowSpaces(focused_window)[1] == new_space
-
-            -- add window and tile
-            self:addWindow(focused_window)
-            self:tileSpace(old_space)
-            self:tileSpace(new_space)
-            focusSpace(new_space, focused_window)
-            return true -- done
-        end)
-
-        -- pick up window, switch spaces, wait for space to be ready, drag and drop window, wait for window to be ready
-        newMouseEvent(leftMouseDown, start_point):post()
-        Spaces.gotoSpace(new_space)
-        local start_time = Timer.secondsSinceEpoch()
-        Timer.doUntil(do_window_drag, function(timer)
-                if Timer.secondsSinceEpoch() - start_time > 4 then
-                    self.logger.ef("moveWindowToSpace() timeout! new space %d curr space %d window space %d", new_space,
-                        Spaces.activeSpaceOnScreen(screen:id()), Spaces.windowSpaces(focused_window)[1])
-                    timer:stop()
-                end
-            end,
-            Window.animationDuration)
-    else -- MacOS < 14.5
-        Spaces.moveWindowToSpace(focused_window, new_space)
-        self:addWindow(focused_window)
-        self:tileSpace(old_space)
-        self:tileSpace(new_space)
-        Spaces.gotoSpace(new_space)
-
-        focusSpace(new_space, focused_window)
+    local ret, err = MissionControl:moveWindowToSpace(focused_window, new_space)
+    if not ret or err then
+        self.logger.e(err)
+        return
     end
+
+    self:addWindow(focused_window)
+    self:tileSpace(old_space)
+    self:tileSpace(new_space)
+
+    MissionControl:focusSpace(new_space, focused_window)
 end
 
 ---move and resize a window to the coordinates specified by the frame
