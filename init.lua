@@ -107,12 +107,21 @@ PaperWM.default_hotkeys = {
 }
 
 -- filter for windows to manage
-PaperWM.window_filter = WindowFilter.new():setOverrideFilter({
-    visible = true,
-    fullscreen = false,
-    hasTitlebar = true,
-    allowRoles = "AXStandardWindow"
+-- PaperWM.window_filter = WindowFilter.new():setOverrideFilter({
+--     visible = true,
+--     fullscreen = false,
+--     hasTitlebar = true,
+--     allowRoles = "AXStandardWindow"
+-- })
+
+PaperWM.window_filter = hs.window.filter.new()
+:setDefaultFilter({
+  visible = true,
+  fullscreen = false,
+  allowTitles = true,
+  allowRoles = "AXStandardWindow"
 })
+
 -- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Finder", false)
 -- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Preview", false)
 -- PaperWM.window_filter = PaperWM.window_filter:setAppFilter("Spotify", false)
@@ -356,36 +365,6 @@ function PaperWM:bindHotkeys(mapping)
         move_window_9 = partial(self.moveWindowToSpace, self, 9)
     }
     hs.spoons.bindHotkeysToSpec(spec, mapping)
-end
-
---Split the screen
-function PaperWM:splitScreen()
-    -- get current focused window
-    local focused = hs.window.focusedWindow()
-    if not focused then return end
-
-    -- get window to right
-    local focusedIndex = index_table[focused:id()]
-    if not focusedIndex then return end
-
-    local rightWindow = getWindow(focusedIndex.space, focusedIndex.col + 1, focusedIndex.row)
-    if not rightWindow then return end
-
-    -- get screen info
-    local screen = focused:screen()
-    local screenFrame = screen:frame()
-    local focusFrame = focused:frame()
-
-    -- calculate new frames
-    local focusNewFrame = hs.geometry.rect(screenFrame.x, screenFrame.y, screenFrame.w/2, screenFrame.h)
-    local rightNewFrame = hs.geometry.rect(screenFrame.x + screenFrame.w/2, screenFrame.y, screenFrame.w/2, screenFrame.h)
-
-    -- move windows
-    self:moveWindow(focused, focusNewFrame)
-    self:moveWindow(rightWindow, rightNewFrame)
-
-    -- update layout
-    self:tileSpace(focusedIndex.space)
 end
 
 --Split the screen
